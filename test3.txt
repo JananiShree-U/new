@@ -1,1 +1,501 @@
-hello
+
+# backend/main.py
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
+from safety import check_safety
+
+app = FastAPI(title="Safe Chat Backend")
+
+# CORS so React can talk to this API
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:3000", "*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+class ChatRequest(BaseModel):
+    message: str
+
+class ChatResponse(BaseModel):
+    reply: str
+    flagged: bool = False   # whether safety triggered
+
+def basic_bot_logic(text: str) -> str:
+    """
+    Very simple general Q&A / small-talk logic.
+    Extend this with your own rules or plug in an LLM later.
+    """
+    t = text.lower().strip()
+
+    if any(g in t for g in ["hi", "hello", "hey"]):
+        return "Hey there 👋 How can I help you today?"
+    if "your name" in t:
+        return "I’m a small safe-chat assistant built with FastAPI + React."
+    if "help" in t:
+        return (
+            "You can ask me simple questions, or you can extend my backend "
+            "to connect to a real AI model or your own knowledge base."
+        )
+    if "what can you do" in t:
+        return "Right now I can chat and demonstrate safety precautions. You can upgrade my brain later 🤖."
+
+    return "I’m not very smart yet, but you can improve my backend logic anytime!"
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat(req: ChatRequest):
+    user_text = req.message
+
+    # 1. Safety check FIRST
+    flagged, safe_reply = check_safety(user_text)
+    if flagged:
+        return ChatResponse(reply=safe_reply, flagged=True)
+
+    # 2. Normal bot logic if safe
+    reply = basic_bot_logic(user_text)
+    return ChatResponse(reply=reply, flagged=False)
+
+requirements.txt
+fastapi
+uvicorn[standard]
+
+# safety.py
+from typing import Tuple
+
+SELF_HARM_KEYWORDS = [
+    "kill myself", "suicide", "end my life", "self harm", "hurt myself",
+    "i want to die", "i am done", "end it all", "cut myself"
+]
+
+VIOLENCE_KEYWORDS = [
+    "kill someone", "hurt others", "murder", "attack", "harm others"
+]
+
+def check_safety(text: str) -> Tuple[bool, str]:
+    t = text.lower().strip()
+
+    for k in SELF_HARM_KEYWORDS:
+        if k in t:
+            return True, (
+                "I’m really sorry you're feeling this way. "
+                "I can't help with harmful actions, but please consider talking "
+                "to someone you trust or a trained listener."
+            )
+
+    for k in VIOLENCE_KEYWORDS:
+        if k in t:
+            return True, (
+                "I can't help with anything that harms others. "
+                "If you're feeling stressed or angry, sharing your thoughts with someone "
+                "you trust can help."
+            )
+
+    return False, ""
+
+front end
+
+App.css
+#root {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 2rem;
+  text-align: center;
+}
+
+.logo {
+  height: 6em;
+  padding: 1.5em;
+  will-change: filter;
+  transition: filter 300ms;
+}
+.logo:hover {
+  filter: drop-shadow(0 0 2em #646cffaa);
+}
+.logo.react:hover {
+  filter: drop-shadow(0 0 2em #61dafbaa);
+}
+
+@keyframes logo-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  a:nth-of-type(2) .logo {
+    animation: logo-spin infinite 20s linear;
+  }
+}
+
+.card {
+  padding: 2em;
+}
+
+.read-the-docs {
+  color: #888;
+}
+
+// src/App.jsx
+import React, { useState } from "react";
+
+const API_URL = "http://localhost:8000/chat";
+
+export default function App() {
+  const [messages, setMessages] = useState([
+    {
+      id: 1,
+      role: "assistant",
+      content: "Hi! 👋 I’m your safe chat assistant. How can I help?",
+      flagged: false,
+    },
+  ]);
+
+  const [input, setInput] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+
+  const sendMessage = async () => {
+    if (!input.trim()) return;
+    if (isLoading) return;
+
+    const userText = input.trim();
+
+    // Add user message
+    setMessages((prev) => [
+      ...prev,
+      { id: Date.now(), role: "user", content: userText, flagged: false },
+    ]);
+
+    setInput("");
+    setIsLoading(true);
+
+    try {
+      const res = await fetch(API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: userText }),
+      });
+
+      const data = await res.json();
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now() + 1,
+          role: "assistant",
+          content: data.reply,
+          flagged: data.flagged,
+        },
+      ]);
+    } catch (e) {
+      console.error("Request to backend failed:", e); // <-- now 'e' is used
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now() + 100,
+          role: "assistant",
+          content: "⚠️ Unable to reach server.",
+          flagged: false,
+        },
+      ]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const onKeyPress = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  };
+
+  return (
+    <div className="app-root">
+      <header className="app-header">
+        <div className="app-title">
+          <span className="dot"></span>
+          Safe Chat UI
+        </div>
+        <div className="app-subtitle">React + FastAPI</div>
+      </header>
+
+      <div className="notice">
+        ⚠️ This assistant avoids harmful content and provides safe responses.
+      </div>
+
+      <div className="chat-box">
+        <div className="messages">
+          {messages.map((m) => (
+            <Message key={m.id} msg={m} />
+          ))}
+
+          {isLoading && (
+            <div className="message-row assistant">
+              <div className="avatar assistant-avatar">AI</div>
+              <div className="bubble assistant-bubble typing">
+                <span className="dot-anim"></span>
+                <span className="dot-anim"></span>
+                <span className="dot-anim"></span>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <footer className="input-bar">
+        <textarea
+          className="input-box"
+          placeholder="Type your message…"
+          rows={1}
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={onKeyPress}
+        />
+        <button
+          className="send-btn"
+          disabled={isLoading || !input.trim()}
+          onClick={sendMessage}
+        >
+          Send
+        </button>
+      </footer>
+    </div>
+  );
+}
+
+function Message({ msg }) {
+  const isUser = msg.role === "user";
+  const classBubble = isUser
+    ? "bubble user-bubble"
+    : msg.flagged
+    ? "bubble assistant-bubble flagged"
+    : "bubble assistant-bubble";
+
+  return (
+    <div className={`message-row ${isUser ? "user" : "assistant"}`}>
+      <div
+        className={`avatar ${isUser ? "user-avatar" : "assistant-avatar"}`}
+      >
+        {isUser ? "You" : "AI"}
+      </div>
+      <div className={classBubble}>{msg.content}</div>
+    </div>
+  );
+}
+
+Index.css
+/* GENERAL LAYOUT */
+body {
+  margin: 0;
+  background: #0f172a;
+  color: white;
+  font-family: system-ui, sans-serif;
+  height: 100vh;
+}
+
+#root {
+  height: 100%;
+}
+
+.app-root {
+  max-width: 900px;
+  height: 100%;
+  margin: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* HEADER */
+.app-header {
+  padding: 12px 16px;
+  border-radius: 16px;
+  background: rgba(30, 41, 59, 0.9);
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  border: 1px solid rgba(100, 116, 139, 0.4);
+}
+
+.app-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  background: #22c55e;
+  border-radius: 50%;
+  box-shadow: 0 0 0 6px rgba(34, 197, 94, 0.3);
+}
+
+.notice {
+  background: rgba(51, 65, 85, 0.4);
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-size: 14px;
+  margin-bottom: 10px;
+}
+
+/* CHAT BOX */
+.chat-box {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(71, 85, 105, 0.5);
+  border-radius: 16px;
+  padding: 12px;
+  overflow: hidden;
+}
+
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding-right: 8px;
+}
+
+/* MESSAGE ROW */
+.message-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+  max-width: 85%;
+}
+
+.message-row.user {
+  margin-left: auto;
+  flex-direction: row-reverse;
+}
+
+/* AVATAR */
+.avatar {
+  width: 30px;
+  height: 30px;
+  background: #475569;
+  border-radius: 50%;
+  font-size: 12px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.user-avatar {
+  background: #64748b;
+}
+
+.assistant-avatar {
+  background: linear-gradient(135deg, #22c55e, #0ea5e9);
+  color: #0f172a;
+}
+
+/* BUBBLES */
+.bubble {
+  padding: 10px 14px;
+  border-radius: 14px;
+}
+
+.user-bubble {
+  background: #4f46e5;
+}
+
+.assistant-bubble {
+  background: #1e293b;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+}
+
+/* SAFETY FLAG */
+.flagged {
+  border-color: gold !important;
+  box-shadow: 0 0 5px gold;
+}
+
+/* TYPING ANIMATION */
+.typing .dot-anim {
+  width: 6px;
+  height: 6px;
+  background: #9ca3af;
+  border-radius: 50%;
+  margin-right: 4px;
+  animation: blink 1s infinite ease-in-out alternate;
+}
+
+.dot-anim:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.dot-anim:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes blink {
+  from { opacity: 0.3; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(-3px); }
+}
+
+/* INPUT BAR */
+.input-bar {
+  margin-top: 12px;
+  display: flex;
+  gap: 8px;
+  background: #1e293b;
+  border: 1px solid #475569;
+  padding: 10px;
+  border-radius: 16px;
+}
+
+.input-box {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: white;
+  resize: none;
+  outline: none;
+}
+
+.send-btn {
+  background: linear-gradient(135deg, #22c55e, #0ea5e9);
+  border: none;
+  border-radius: 12px;
+  padding: 10px 16px;
+  font-weight: 600;
+  cursor: pointer;
+  color: #0f172a;
+}
+
+.send-btn:disabled {
+  opacity: 0.4;
+}
+
+Main.jsx
+// src/main.jsx
+import React from "react";
+import ReactDOM from "react-dom/client";
+import App from "./App.jsx";
+import "./index.css";
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+
+
+Index.html
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Safe Chat UI</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
